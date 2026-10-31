@@ -1,0 +1,639 @@
+{
+  "name": "Agente Bolao Copa",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "bolao-copa",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "7c39dba3-8adb-4f99-9aba-0174b74ebfb7",
+      "name": "Webhook"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        528,
+        240
+      ],
+      "id": "bffee788-c583-4cb9-ac62-a38336027b6f",
+      "name": "No Operation, do nothing"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Webhook').item.json.body.data.message.conversation || $('Webhook').item.json.body.data.message.extendedTextMessage?.text }}",
+        "options": {
+          "systemMessage": "=### CONTEXTO TEMPORAL (DADOS DO SISTEMA)\nData e hora atual do usuário: {{ $now.setZone('America/Sao_Paulo').toFormat('yyyy-MM-dd HH:mm:ss') }} (Horário de Brasília)\n\n---\n\nVocê é o Agente Especialista do Bolão da Copa, um assistente inteligente responsável por analisar partidas, calcular probabilidades de resultados e gerenciar os palpites diretamente no banco de dados Supabase (PostgreSQL).\n\nSempre que o usuário solicitar uma análise ou o registro de apostas, você deve coordenar as ações utilizando a ferramenta de banco de dados disponível para ler e escrever dados de forma dinâmica.\n\n---\n\n### ESTRUTURA DO BANCO DE DADOS (SCHEMA REAL)\nUse exatamente estes nomes de tabelas e colunas em suas consultas:\n\n1. Tabela `public.selecoes`\n   - `id` (uuid): Identificador único da seleção (Chave Primária)\n   - `nome` (character varying): Nome da seleção (ex: 'Espanha', 'Cabo Verde')\n   - `ranking_fifa` (integer): Pontuação ou posição no ranking da FIFA\n   - `grupo` (character): Grupo da copa (ex: 'A', 'B')\n   - `codigo_fifa` (text): Sigla de 3 letras da seleção (ex: 'BRA', 'ESP')\n\n2. Tabela `public.jogos`\n   - `id` (uuid): Identificador único do jogo (Chave Primária)\n   - `rodada` (character varying): Rodada do campeonato (ex: 'Fase de Grupos', 'Oitavas')\n   - `time_a_id` (uuid): ID da seleção mandante (Chave Estrangeira apontando para selecoes.id)\n   - `time_b_id` (uuid): ID da seleção visitante (Chave Estrangeira apontando para selecoes.id)\n   - `data_jogo` (timestamp with time zone): Data e hora da partida\n   - `placar_a` (integer): Placar real do time A (preenchido apenas após o fim do jogo)\n   - `placar_b` (integer): Placar real do time B (preenchido apenas após o fim do jogo)\n   - `encerrado` (boolean): Indica se o jogo já terminou (true/false)\n\n3. Tabela `public.palpites`\n   - `id` (uuid): Gerado automaticamente por padrão (não precisa enviar no INSERT)\n   - `jogo_id` (uuid): ID do jogo referenciado (Chave Estrangeira apontando para jogos.id)\n   - `placar_sugerido_a` (integer): Gols calculados por você para o time A\n   - `placar_sugerido_b` (integer): Gols calculados por você para o time B\n   - `analise` (text): Sua justificativa textual resumida do porquê escolheu esse placar\n   - `confianca_percentual` (integer): Sua porcentagem de confiança/probabilidade de vitória do time mais forte (um número inteiro de 0 a 100)\n\n---\n\n### REGRAS OBRIGATÓRIAS PARA GERAÇÃO DE SQL (CRUCIAL)\nO banco PostgreSQL é estritamente case-sensitive para identificadores. Se você violar estas regras, o sistema quebrará:\n1. Escreva **TODOS** os nomes de tabelas e colunas em letras **ABSOLUTAMENTE MINÚSCULAS**.\n2. Use `nome`, `id`, `data_jogo`, `confianca_percentual`. NUNCA use letras maiúsculas ou CamelCase nos identificadores.\n3. Nunca coloque aspas duplas em nomes de colunas (ex: use `sa.nome`, nunca `sa.\"Nome\"`).\n4. Ao inserir na tabela `public.palpites`, envie apenas os campos: `jogo_id`, `placar_sugerido_a`, `placar_sugerido_b`, `analise` e `confianca_percentual`.\n5. **FILTRO DE DATA:** O banco está em UTC. Baseie-se na \"Data e hora atual\" fornecida no topo para calcular o dia alvo (hoje, amanhã, etc.) e aplique sempre a conversão: `WHERE (j.data_jogo AT TIME ZONE 'America/Sao_Paulo')::date = 'YYYY-MM-DD'`.\n\n---\n\n### CLIPBOARD / FLUXO DE EXECUÇÃO\n1. **Identificação**: Entenda o período ou seleções que o usuário quer apostar (ex: \"jogos de amanhã\" onde `j.encerrado = false`).\n2. **Coleta**: Faça um SELECT unindo `public.jogos` com `public.selecoes` (duas vezes, uma para o time A e outra para o time B usando aliases como `sa` e `sb`) para obter os nomes e rankings fifa das equipes.\n3. **Análise**: Avalie os dados coletados e defina o placar ideal, monte um breve texto explicativo para o campo `analise` e dê uma nota de 0 a 100 para a `confianca_percentual`.\n4. **Gravação**: Execute um comando de `INSERT INTO public.palpites` contendo as informações calculadas. Se o usuário pedir para atualizar ou se preferir prevenir erros de duplicidade, você pode usar a estrutura `ON CONFLICT (jogo_id) DO UPDATE ...` caso tenha uma constraint única para isso, ou simplesmente faça o INSERT padrão.\n5. **Retorno**: Formate e apresente a resposta de acordo com as regras visuais abaixo.\n\n---\n\n### FORMATO E ESTILIZAÇÃO DA RESPOSTA (OBRIGATÓRIO)\nSua resposta deve ser extremamente organizada, clean e com leitura fluida. Reduza a quantidade de ícones e force o espaçamento correto entre blocos de texto.\n\nSiga estritamente estas diretrizes de formatação:\n1. **OMITA IDs TÉCNICOS:** Nunca exiba `jogo_id`, códigos UUID ou chaves de banco na resposta para o usuário.\n2. **MINIMALISMO NOS EMOJIS:** Use no máximo um emoji de futebol (⚽) na introdução. Não utilize ícones repetitivos ou chamativos (como fogos, setas ou alvos) no meio das listas de jogos.\n3. **OBRIGATORIEDADE DE QUEBRA DE LINHAS:** Você DEVE pular uma linha em branco inteira entre a introdução e as listas, entre um jogo e outro, e entre o fim da lista e a sua pergunta final. Os dados nunca podem parecer blocos de texto amontoados.\n4. **DATA E HORA:** Formato brasileiro: `DD/MM às HH:MM (Horário de Brasília)`.\n5. **MODELO DE LAYOUT (Siga exatamente esta estrutura de espaçamento):**\n\nPalpites gerados e salvos com sucesso para os jogos de amanhã! ⚽\n\n**PALPITES REGISTRADOS NO BOLÃO**\n\n• **Time A [ Placar Sugerido A ] x [ Placar Sugerido B ] Time B**\nHorário: DD/MM às HH:MM | Confiança: X%\nAnálise: [Sua justificativa aqui]\n\n• **Time A [ Placar Sugerido A ] x [ Placar Sugerido B ] Time B**\nHorário: DD/MM às HH:MM | Confiança: X%\nAnálise: [Sua justificativa aqui]\n\n**JOGOS ENCERRADOS (RESULTADO REAL)**\n\n• **Time A [ Placar A ] x [ Placar B ] Time B**\nRealizado em: DD/MM às HH:MM | Status: Encerrado\n\nDeseja visualizar mais alguma informação ou realizar alguma alteração nos palpites?"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        528,
+        -288
+      ],
+      "id": "45ff357a-570d-47d4-9d9b-2f2fb1cdc32c",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-5-mini",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        464,
+        -32
+      ],
+      "id": "d2cee7ba-9343-4e4c-82f7-e49367858a52",
+      "name": "OpenRouter Chat Model"
+    },
+    {
+      "parameters": {
+        "resource": "messages-api",
+        "instanceName": "={{ $('Webhook').item.json.body.instance }}",
+        "remoteJid": "={{ $('Webhook').item.json.body.data.key.remoteJid }}",
+        "messageText": "={{ $json.output }}",
+        "options_message": {}
+      },
+      "type": "n8n-nodes-evolution-api.evolutionApi",
+      "typeVersion": 1,
+      "position": [
+        848,
+        -288
+      ],
+      "id": "430c759a-a628-4b4e-9ad8-c70abf3c4e1c",
+      "name": "Enviar texto"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 19,
+              "triggerAtMinute": 49
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        48,
+        528
+      ],
+      "id": "69f628af-ef2f-4ede-8de5-a2b6f5b070e6",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Webhook').item.json.body.sender }}",
+        "contextWindowLength": 3
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryRedisChat",
+      "typeVersion": 1.6,
+      "position": [
+        624,
+        -32
+      ],
+      "id": "cf364bff-b8e7-4a27-80e6-4f173ea6a452",
+      "name": "Redis Chat Memory"
+    },
+    {
+      "parameters": {
+        "operation": "set-presence",
+        "instanceName": "={{ $('Webhook').item.json.body.instance }}",
+        "presence": "unavailable"
+      },
+      "type": "n8n-nodes-evolution-api.evolutionApi",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        -288
+      ],
+      "id": "54055444-b04b-465a-834b-c2e31525b6fa",
+      "name": "Tira o online"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  json: {\n    codigo_fifa: $json.code,\n    nome: $json.name,\n    ranking_fifa: null,\n    grupo: $json.groupStage?.group ?? null,\n    criado_em: new Date().toISOString(),\n  },\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        1376
+      ],
+      "id": "b952ba51-98ec-453f-8c84-c96a9cc97cf0",
+      "name": "Code in JavaScript",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "https://api.zafronix.com/fifa/worldcup/v1/teams",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "tournament",
+              "value": "2026"
+            },
+            {}
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "SUA_CHAVE_AQUI"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1024,
+        1376
+      ],
+      "id": "d4ec4df3-4ef8-4895-98d7-eb8c4524e763",
+      "name": "HTTP Request Seleções",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "tableId": "selecoes",
+        "dataToSend": "autoMapInputData"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        1376
+      ],
+      "id": "9ab6489a-865e-45ad-b084-44265e787a97",
+      "name": "Create a row todas seleções",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "https://api.zafronix.com/fifa/worldcup/v1/matches",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "year",
+              "value": "2026"
+            },
+            {
+              "name": "limit ",
+              "value": "500"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "SUA_CHAVE_AQUI"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1216,
+        1088
+      ],
+      "id": "69909eed-1cd5-4806-b129-08f3712db097",
+      "name": "HTTP Request Jogos",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const jogos = $('Code Explode Jogos').all();\nconst selecoes = $('Get many Seleções').all();\n\nconst aliases = {\n  'usa': 'united states',\n  'korea republic': 'south korea',\n  'türkiye': 'turkey',\n  \"côte d'ivoire\": 'ivory coast',\n  'cabo verde': 'cape verde',\n  'ir iran': 'iran',\n  'congo dr': 'dr congo',\n  'czechia': 'czech republic',\n};\n\nfunction normalizar(nome) {\n  if (!nome) return null;\n  return aliases[nome.trim().toLowerCase()] || nome.trim().toLowerCase();\n}\n\n// mapa nome -> uuid\nconst mapa = {};\n\nfor (const s of selecoes) {\n  if (s.json.nome && s.json.id) {\n    mapa[normalizar(s.json.nome)] = s.json.id;\n  }\n}\n\nconst naoEncontrados = [];\n\nconst resultado = jogos.map(item => {\n  const jogo = item.json;\n\n  const timeA = mapa[normalizar(jogo.homeTeam)] ?? null;\n  const timeB = mapa[normalizar(jogo.awayTeam)] ?? null;\n\n  if (!timeA || !timeB) {\n    naoEncontrados.push({\n      homeTeam: jogo.homeTeam,\n      awayTeam: jogo.awayTeam,\n      timeAEncontrado: !!timeA,\n      timeBEncontrado: !!timeB,\n    });\n  }\n\n  return {\n    json: {\n      api_id: jogo.id,\n      rodada: jogo.stage ?? null,\n\n      // 🔥 SEMPRE EXISTEM (mesmo que null)\n      time_a_id: timeA,\n      time_b_id: timeB,\n\n      data_jogo: jogo.kickoffUtc ?? null,\n\n      placar_a:\n        jogo.homeScore !== undefined ? jogo.homeScore : null,\n\n      placar_b:\n        jogo.awayScore !== undefined ? jogo.awayScore : null,\n\n      encerrado:\n        jogo.homeScore != null &&\n        jogo.awayScore != null,\n    },\n  };\n});\n\nconsole.log('Total jogos:', resultado.length);\nconsole.log('Não encontrados:', naoEncontrados);\n\nreturn resultado;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1664,
+        1088
+      ],
+      "id": "410fb4a8-a67c-47d6-8801-2a5377cfd78a",
+      "name": "Code Mapear UUIDs",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "selecoes",
+        "returnAll": true
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1024,
+        1088
+      ],
+      "id": "a425d704-c431-4e6a-85ba-91b781e0592d",
+      "name": "Get many Seleções",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const jogos = items[0].json.data;\n\nreturn jogos.map(jogo => ({\n  json: jogo\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        1088
+      ],
+      "id": "b9d4ada7-ee1b-4b2a-9b19-252c8340a97c",
+      "name": "Code Explode Jogos",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "tableId": "jogos",
+        "dataToSend": "autoMapInputData"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1872,
+        1088
+      ],
+      "id": "29221c02-5693-4dfc-9e0f-bdae7ab6d369",
+      "name": "Create Jogos",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "https://api.zafronix.com/fifa/worldcup/v1/matches",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "year",
+              "value": "2026"
+            },
+            {
+              "name": "limit ",
+              "value": "500"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "SUA_CHAVE_AQUI"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        272,
+        528
+      ],
+      "id": "bfdcab1f-dc83-4c27-b5e5-0426d7652c89",
+      "name": "HTTP Request Jogos2"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "jogos",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "api_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.api_id }}"
+            }
+          ]
+        },
+        "dataToSend": "autoMapInputData"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        992,
+        528
+      ],
+      "id": "d4a378ed-69a9-4640-9d24-63a590beafc0",
+      "name": "Update placar dos jogos"
+    },
+    {
+      "parameters": {
+        "jsCode": "const jogos = items[0].json.data;\n\nreturn jogos.map(jogo => ({\n  json: jogo\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        528
+      ],
+      "id": "6b0bfe1c-1c17-46ae-a89f-cc09780e3154",
+      "name": "Separar jogos em itens"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items\n  .filter(item => {\n    const jogo = item.json;\n\n    return (\n      jogo.homeScore !== null &&\n      jogo.awayScore !== null\n    );\n  })\n  .map(item => {\n    const jogo = item.json;\n\n    return {\n      json: {\n        api_id: jogo.id,\n        placar_a: jogo.homeScore,\n        placar_b: jogo.awayScore,\n        encerrado: true,\n      }\n    };\n  });"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        528
+      ],
+      "id": "6234e911-3281-44cf-9c57-b88c0838674a",
+      "name": "Jogos encerrados"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c61a7c26-8ca5-4390-9831-da353b8dfea2",
+              "leftValue": "={{ $json.body.data.key.remoteJid }}",
+              "rightValue": "ID_DO_GRUPO@g.us",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "2d7e067d-335a-47af-be1b-bb1f0a1ea843",
+              "leftValue": "={{ $json.body.data.message.conversation.toLowerCase() }}",
+              "rightValue": "bot",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        224,
+        0
+      ],
+      "id": "4461f4d8-4aec-48b0-beeb-8eb4580a7a53",
+      "name": "If - mensagem do grupo e comeca com bot"
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Executa comandos SQL brutos (SELECT, INSERT, UPDATE) diretamente no banco de dados do bolão. O input deve ser EXCLUSIVAMENTE a string da query SQL válida.",
+        "operation": "executeQuery",
+        "query": "{{ $fromAI('query', 'A query SQL completa (SELECT, INSERT ou UPDATE) que você deseja executar no banco de dados do bolão.') }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.6,
+      "position": [
+        832,
+        -48
+      ],
+      "id": "a436e78e-5364-4abd-a31e-c24e04d6c0b3",
+      "name": "Query que o agente realizará"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "If - mensagem do grupo e comeca com bot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Enviar texto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request Jogos2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar texto": {
+      "main": [
+        [
+          {
+            "node": "Tira o online",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Create a row todas seleções",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request Seleções": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request Jogos": {
+      "main": [
+        [
+          {
+            "node": "Code Explode Jogos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many Seleções": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request Jogos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code Explode Jogos": {
+      "main": [
+        [
+          {
+            "node": "Code Mapear UUIDs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code Mapear UUIDs": {
+      "main": [
+        [
+          {
+            "node": "Create Jogos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request Jogos2": {
+      "main": [
+        [
+          {
+            "node": "Separar jogos em itens",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Separar jogos em itens": {
+      "main": [
+        [
+          {
+            "node": "Jogos encerrados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jogos encerrados": {
+      "main": [
+        [
+          {
+            "node": "Update placar dos jogos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If - mensagem do grupo e comeca com bot": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Operation, do nothing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query que o agente realizará": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}
